@@ -1,0 +1,26 @@
+# mediactl configuration example
+# Copy to config.yaml and adjust values
+
+smb:
+  host: media-server       # SMB hostname (leave empty to use local path)
+  share: archive           # Share name
+  # username and password: use env vars MEDIACTL_SMB_USER / MEDIACTL_SMB_PASS
+  # or pass --username / --password on CLI
+
+local:
+  path: /home/user/Documents   # Local path (used when smb.host is empty)
+
+scanner:
+  workers: 8
+  exclude:
+    - "*.tmp"
+    - ".DS_Store"
+    - "Thumbs.db"
+    - "*.~lock*"
+  max_depth: -1            # -1 = unlimited
+
+database:
+  path: ./mediahub.db      # SQLite database file path
+
+moc:
+  output_dir: ./vault      # Required: Obsidian vault output directory

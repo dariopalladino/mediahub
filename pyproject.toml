@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mediactl"
+version = "0.1.0"
+description = "Local-first media indexing, deduplication, and MOC generation CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "MediaHub", email = "dario.palladino@gmail.com" }]
+
+dependencies = [
+    "typer[all]>=0.12",
+    "rich>=13",
+    "sqlmodel>=0.0.19",
+    "structlog>=24",
+    "pyyaml>=6",
+    "pillow>=10",
+    "mutagen>=1.47",
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+    "smbprotocol>=1.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "mypy>=1.10",
+    "ruff>=0.4",
+    "types-PyYAML>=6",
+    "types-Pillow>=10",
+]
+
+[project.scripts]
+mediactl = "mediactl.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "mypy>=1.10",
+    "ruff>=0.4",
+    "types-PyYAML>=6",
+    "types-Pillow>=10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501", "B904", "B008", "SIM105"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "PLR2004"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["mediactl"]
+omit = ["tests/*"]
