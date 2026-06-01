@@ -14,8 +14,9 @@
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+Abstract scanner base class and FileEntry dataclass.
 """
-"""Abstract scanner base class and FileEntry dataclass."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

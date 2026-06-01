@@ -14,8 +14,9 @@
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+Image metadata extractor using Pillow and EXIF data.
 """
-"""Image metadata extractor using Pillow and EXIF data."""
 from __future__ import annotations
 
 from pathlib import Path

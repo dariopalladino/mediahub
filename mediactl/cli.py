@@ -39,13 +39,14 @@ from mediactl import __version__
 app = typer.Typer(
     name="mediahub CLI",
     help="Local-first media indexing and deduplication CLI.",
-    license="""
-    MediaHub CLI -  Copyright (C) 2026  Dario Palladino
-    This program comes with ABSOLUTELY NO WARRANTY; see LICENSE for details.
-    This is free software, and you are welcome to redistribute it
-    under certain conditions. See LICENSE for details.
-    """,
     no_args_is_help=True,
+)
+
+_LICENSE_TEXT = (
+    "MediaHub CLI - Copyright (C) 2026  Dario Palladino\n"
+    "This program comes with ABSOLUTELY NO WARRANTY; see LICENSE for details.\n"
+    "This is free software, and you are welcome to redistribute it\n"
+    "under certain conditions. See LICENSE for details."
 )
 console = Console()
 log = structlog.get_logger()
@@ -525,15 +526,20 @@ def init_db(
 @app.callback(invoke_without_command=True)
 def version_callback(
     version: bool = typer.Option(False, "--version", "-V", is_eager=True),
+    license: bool = typer.Option(False, "--license", is_eager=True, help="Show license and exit."),
     ctx: typer.Context = typer.Option(None, hidden=True),  # type: ignore[assignment]
 ) -> None:
     if version:
         console.print(f"mediactl {__version__}")
         raise typer.Exit()
+    if license:
+        console.print(_LICENSE_TEXT)
+        raise typer.Exit()
 
 
 def main() -> None:
     """CLI entry point."""
+    console.print(_LICENSE_TEXT)
     app()
 
 

@@ -14,8 +14,9 @@
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+Document metadata extractor for PDF, DOCX, TXT, Markdown.
 """
-"""Document metadata extractor for PDF, DOCX, TXT, Markdown."""
 from __future__ import annotations
 
 from pathlib import Path

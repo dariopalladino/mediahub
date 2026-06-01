@@ -14,8 +14,8 @@
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
-"""
-"""SQLModel table definitions for mediactl.
+
+SQLModel table definitions for mediactl.
 
 Schema per .spec/10_design/DB_SCHEMA_MEDIACTL.md
 """

@@ -14,8 +14,9 @@
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+Video metadata extractor using ffprobe (subprocess).
 """
-"""Video metadata extractor using ffprobe (subprocess)."""
 from __future__ import annotations
 
 import json
