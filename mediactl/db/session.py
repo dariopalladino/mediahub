@@ -1,3 +1,20 @@
+"""
+    Local-first media indexing and deduplication CLI.
+    Copyright (C) 2026  Dario Palladino
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
 """Database engine, session factory, and schema initialisation.
 
 Usage:
@@ -46,6 +63,10 @@ def init_db(db_path: Path) -> None:
     def _set_wal(dbapi_conn, _):
         dbapi_conn.execute("PRAGMA journal_mode=WAL")
         dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+    # Import models before create_all so SQLModel metadata is fully populated.
+    # Without this, table creation can miss models that have not been imported yet.
+    from mediactl.db import models  # noqa: F401
 
     SQLModel.metadata.create_all(_engine)
     log.info("database.initialised", path=str(db_path))

@@ -1,4 +1,19 @@
-"""mediactl CLI — entry point for all commands.
+"""
+    Local-first media indexing and deduplication CLI.
+    Copyright (C) 2026  Dario Palladino
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 Commands:
     scan        Scan SMB share or local path
@@ -9,6 +24,7 @@ Commands:
 """
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,8 +37,14 @@ from rich.table import Table
 from mediactl import __version__
 
 app = typer.Typer(
-    name="mediactl",
+    name="mediahub CLI",
     help="Local-first media indexing and deduplication CLI.",
+    license="""
+    MediaHub CLI -  Copyright (C) 2026  Dario Palladino
+    This program comes with ABSOLUTELY NO WARRANTY; see LICENSE for details.
+    This is free software, and you are welcome to redistribute it
+    under certain conditions. See LICENSE for details.
+    """,
     no_args_is_help=True,
 )
 console = Console()
@@ -49,6 +71,27 @@ def _init_db_from_config(cfg) -> None:
     from mediactl.db.session import init_db
 
     init_db(cfg.db_path)
+
+
+def _resolve_smb_credentials(
+    cli_username: str | None,
+    cli_password: str | None,
+    cfg,
+) -> tuple[str, str]:
+    """Resolve SMB credentials from CLI > environment > config."""
+    user = cli_username
+    if user is None:
+        user = os.getenv("MEDIACTL_SMB_USER")
+    if not user:
+        user = cfg.smb.username
+
+    password = cli_password
+    if password is None:
+        password = os.getenv("MEDIACTL_SMB_PASS")
+    if not password:
+        password = cfg.smb.password
+
+    return user or "", password or ""
 
 
 @app.command()
@@ -101,8 +144,15 @@ def scan(
     if use_smb:
         from mediactl.scanner.smb import SMBScanner
 
-        smb_user = username or cfg.smb.username
-        smb_pass = password or cfg.smb.password
+        smb_user, smb_pass = _resolve_smb_credentials(username, password, cfg)
+        if not smb_user or not smb_pass:
+            console.print("[red]SMB credentials are required for SMB scans.[/red]")
+            console.print(
+                "Provide --username/--password, set MEDIACTL_SMB_USER/MEDIACTL_SMB_PASS, "
+                "or configure smb.username/smb.password in config.yaml"
+            )
+            raise typer.Exit(1)
+
         scanner = SMBScanner(
             username=smb_user,
             password=smb_pass,
@@ -161,75 +211,101 @@ def scan(
         ) as progress:
             task = progress.add_task("Scanning...", total=None)
 
-            for entry in scanner.scan(scan_target):
-                progress.update(task, description=f"Scanning: {entry.filename}")
-                files_scanned += 1
+            try:
+                for entry in scanner.scan(scan_target):
+                    progress.update(task, description=f"Scanning: {entry.filename}")
+                    files_scanned += 1
 
-                try:
-                    # Check if already indexed
-                    existing = session.exec(
-                        select(File).where(File.path == entry.path)
-                    ).first()
+                    try:
+                        # Check if already indexed
+                        existing = session.exec(
+                            select(File).where(File.path == entry.path)
+                        ).first()
 
-                    if existing and resume:
-                        continue
+                        if existing and resume:
+                            continue
 
-                    now = _now()
+                        now = _now()
 
-                    if existing:
-                        # Update existing record
-                        existing.size_bytes = entry.size_bytes
-                        existing.modified_at = entry.modified_at
-                        existing.last_seen_at = now
-                        existing.scan_status = "indexed"
-                        db_file = existing
-                    else:
-                        db_file = File(
-                            path=entry.path,
-                            smb_uri=entry.smb_uri,
-                            filename=entry.filename,
-                            extension=entry.extension,
-                            size_bytes=entry.size_bytes,
-                            created_at=entry.created_at,
-                            modified_at=entry.modified_at,
-                            first_seen_at=now,
-                            last_seen_at=now,
-                            indexed_at=now,
-                            scan_status="indexed",
-                        )
+                        if existing:
+                            # Update existing record
+                            existing.size_bytes = entry.size_bytes
+                            existing.modified_at = entry.modified_at
+                            existing.last_seen_at = now
+                            existing.scan_status = "indexed"
+                            db_file = existing
+                        else:
+                            db_file = File(
+                                path=entry.path,
+                                smb_uri=entry.smb_uri,
+                                filename=entry.filename,
+                                extension=entry.extension,
+                                size_bytes=entry.size_bytes,
+                                created_at=entry.created_at,
+                                modified_at=entry.modified_at,
+                                first_seen_at=now,
+                                last_seen_at=now,
+                                indexed_at=now,
+                                scan_status="indexed",
+                            )
 
-                    # Compute hashes for local files
-                    if entry.is_local and not dry_run:
-                        try:
-                            from mediactl.fingerprint import hash_file_full
-                            md5, sha256 = hash_file_full(Path(entry.path))
-                            db_file.md5 = md5
-                            db_file.sha256 = sha256
-                        except Exception as exc:
-                            log.warning("scan.hash_error", path=entry.path, error=str(exc))
-
-                    # Extract metadata
-                    if extract_metadata and plugins and not dry_run:
-                        for plugin in plugins:
-                            if plugin.supports(entry.extension):
+                        # Compute hashes
+                        if not dry_run:
+                            if entry.is_local:
                                 try:
-                                    meta = plugin.process(Path(entry.path))
-                                    # Store metadata in appropriate fields
-                                    if not db_file.mime_type and meta.get("format"):
-                                        db_file.mime_type = meta.get("format", "").lower()
+                                    from mediactl.fingerprint import hash_file_full
+                                    md5, sha256 = hash_file_full(Path(entry.path))
+                                    db_file.md5 = md5
+                                    db_file.sha256 = sha256
                                 except Exception as exc:
-                                    log.warning("scan.metadata_error", path=entry.path, error=str(exc))
-                                break
+                                    log.warning("scan.hash_error", path=entry.path, error=str(exc))
+                            elif entry.smb_uri:
+                                try:
+                                    import smbclient  # type: ignore[import-untyped]
+                                    from mediactl.fingerprint import hash_stream_full
+                                    from mediactl.scanner.smb import parse_smb_uri
+                                    host, share, subpath = parse_smb_uri(entry.smb_uri)
+                                    unc = f"\\\\{host}\\{share}{subpath.replace('/', '\\')}"
+                                    with smbclient.open_file(unc, mode="rb") as smb_f:
+                                        md5, sha256 = hash_stream_full(smb_f)
+                                    db_file.md5 = md5
+                                    db_file.sha256 = sha256
+                                except Exception as exc:
+                                    log.warning("scan.hash_error", path=entry.path, error=str(exc))
 
-                    if not dry_run:
-                        session.add(db_file)
-                        if files_scanned % 500 == 0:
-                            session.commit()
-                        files_updated += 1
+                        # Extract metadata (local files only — SMB paths cannot be opened as local)
+                        if extract_metadata and plugins and not dry_run and entry.is_local:
+                            for plugin in plugins:
+                                if plugin.supports(entry.extension):
+                                    try:
+                                        meta = plugin.process(Path(entry.path))
+                                        # Store metadata in appropriate fields
+                                        if not db_file.mime_type and meta.get("format"):
+                                            db_file.mime_type = meta.get("format", "").lower()
+                                    except Exception as exc:
+                                        log.warning("scan.metadata_error", path=entry.path, error=str(exc))
+                                    break
 
-                except Exception as exc:
-                    errors += 1
-                    log.error("scan.file_error", path=entry.path, error=str(exc))
+                        if not dry_run:
+                            session.add(db_file)
+                            if files_scanned % 500 == 0:
+                                session.commit()
+                            files_updated += 1
+
+                    except Exception as exc:
+                        errors += 1
+                        log.error("scan.file_error", path=entry.path, error=str(exc))
+            except Exception as exc:
+                if use_smb:
+                    message = str(exc)
+                    if "SMBAuthenticationError" in message or "SpnegoError" in message:
+                        console.print("[red]SMB authentication failed.[/red]")
+                        console.print(
+                            "Verify credentials and SMB auth support on the server. "
+                            "If needed, include domain in username (example: DOMAIN\\user)."
+                        )
+                        raise typer.Exit(1)
+                raise
 
             if not dry_run:
                 session.commit()
@@ -430,6 +506,20 @@ def find_files(
             f.path,
         )
     console.print(table)
+
+
+@app.command()
+def init_db(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    log_level: str = typer.Option("INFO", "--log-level"),
+) -> None:
+    """Initialize the database schema."""
+    from mediactl.logging_setup import setup_logging
+
+    setup_logging(log_level)
+    cfg = _load_config_or_exit(config)
+    _init_db_from_config(cfg)
+    console.print(f"[green]Database initialized at:[/green] {cfg.db_path}")
 
 
 @app.callback(invoke_without_command=True)

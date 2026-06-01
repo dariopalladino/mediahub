@@ -17,8 +17,10 @@ env/
 
 # uv
 .uv/
+uv.lock
 
 # Testing
+.ruff_cache/
 .pytest_cache/
 .coverage
 htmlcov/
