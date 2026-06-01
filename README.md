@@ -1,6 +1,6 @@
-# MediaHub — mediactl
+# MediaHub CLI (mediactl)
 
-Local-first media indexing, deduplication, and Obsidian MOC generation CLI.
+CLI to build your Media Server database, find any file with semantic searches, generate deduplication reports and Map of Contents (MOC) stored as Obsidian Vault compatible [[wikilinks]]
 
 ## What it does
 
