@@ -24,3 +24,14 @@ database:
 
 moc:
   output_dir: ./vault      # Required: Obsidian vault output directory
+
+backup:
+  enabled: false           # Independent module; disabled by default
+  source: ""               # Local dir to back up; falls back to local.path if empty
+  destination: ""          # Local/mounted path OR smb://host/share[/path]
+  # username and password: for SMB destinations only. Use env vars
+  # MEDIACTL_SMB_USER / MEDIACTL_SMB_PASS or pass --username / --password on CLI
+  exclude:
+    - "*.tmp"
+    - ".DS_Store"
+  state_file: ./backup_state.json   # Local sync-state cache (never stored at destination)

@@ -19,8 +19,11 @@ Commands:
     scan        Scan SMB share or local path
     dedupe      Detect duplicate files
     generate-moc Generate Obsidian MOC files
+    generate-sidecars Generate Artifact sidecar files for knowledge-graph tools (e.g. Graphify)
     stats       Show index statistics
     find        Search indexed files by keyword
+    backup      Incrementally back up a local folder to a local/SMB destination
+    build-graph Build/update the graph DB consumed by agentic coding tools
 """
 from __future__ import annotations
 
@@ -398,6 +401,56 @@ def generate_moc(
         console.print("[yellow](dry-run: no files written)[/yellow]")
 
 
+@app.command(name="generate-sidecars")
+def generate_sidecars_cmd(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    output_dir: Path | None = typer.Option(None, "--output-dir", "-o", help="Override sidecars output directory"),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite sidecars that already exist (default: skip them, since a harness "
+        "may have enriched them by hand since they were created)."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    log_level: str = typer.Option("INFO", "--log-level"),
+) -> None:
+    """Generate Artifact-sidecar Markdown files for knowledge-graph tools (e.g. Graphify).
+
+    One sidecar per indexed file, containing only the deterministic facts mediactl
+    knows (path, hash, timestamps, MOC membership, duplicate status). Topics,
+    entities, and summaries are intentionally left blank for later enrichment.
+
+    Requires sidecars.enabled: true and sidecars.output_dir in config.yaml.
+    """
+    from mediactl.logging_setup import setup_logging
+
+    setup_logging(log_level)
+
+    from mediactl.config import ConfigError
+
+    cfg = _load_config_or_exit(config)
+    try:
+        cfg.validate_sidecars()
+    except ConfigError as exc:
+        console.print(f"[red]Sidecars error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    _init_db_from_config(cfg)
+
+    out = output_dir or cfg.sidecars_output_path
+
+    from mediactl.db.session import get_session
+    from mediactl.sidecars import generate_sidecars
+
+    with get_session() as session:
+        result = generate_sidecars(session, out, force=force, dry_run=dry_run)
+
+    console.print("\n[green]Sidecar generation complete.[/green]")
+    console.print(f"  Total indexed files: {result.total}")
+    console.print(f"  Sidecars created: {result.created}")
+    console.print(f"  Skipped (already exist): {result.skipped_existing}")
+    if dry_run:
+        console.print("  [yellow](dry-run: no files written)[/yellow]")
+
+
 @app.command()
 def stats(
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
@@ -507,6 +560,302 @@ def find_files(
             f.path,
         )
     console.print(table)
+
+
+@app.command()
+def backup(
+    source: str | None = typer.Argument(None, help="Local path to back up. Overrides config."),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to config.yaml"),
+    destination: str | None = typer.Option(
+        None, "--destination", "-d", help="Local/mounted path or smb://host/share[/path]. Overrides config."
+    ),
+    username: str | None = typer.Option(None, "--username", "-u", help="SMB destination username"),
+    password: str | None = typer.Option(None, "--password", "-p", help="SMB destination password"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would be copied without writing"),
+    exclude: list[str] | None = typer.Option(None, "--exclude", help="Glob patterns to exclude"),
+    log_level: str = typer.Option("INFO", "--log-level", help="Log level"),
+) -> None:
+    """Incrementally back up a local folder to a local/mounted or SMB destination.
+
+    Only files whose content has changed since the last sync are copied.
+    Disabled unless backup.enabled: true is set in config.yaml.
+    """
+    from mediactl.logging_setup import setup_logging
+
+    setup_logging(log_level)
+
+    from mediactl.config import ConfigError
+
+    cfg = _load_config_or_exit(config)
+    try:
+        cfg.validate_backup()
+    except ConfigError as exc:
+        console.print(f"[red]Backup error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    effective_source = source or cfg.backup.source or cfg.local.path
+    effective_destination = destination or cfg.backup.destination
+    effective_exclude = list(exclude or []) + cfg.backup.exclude
+
+    console.print(f"[green]Backing up:[/green] {effective_source} -> {effective_destination}")
+    console.print(f"  dry_run={dry_run}")
+
+    from mediactl.backup.base import BaseBackupTarget
+
+    target: BaseBackupTarget
+    if effective_destination.lower().startswith("smb://"):
+        from mediactl.backup.smb import SMBBackupTarget
+
+        smb_user = username or os.getenv("MEDIACTL_SMB_USER") or cfg.backup.username
+        smb_pass = password or os.getenv("MEDIACTL_SMB_PASS") or cfg.backup.password
+        if not smb_user or not smb_pass:
+            console.print("[red]SMB credentials are required for SMB backup destinations.[/red]")
+            console.print(
+                "Provide --username/--password, set MEDIACTL_SMB_USER/MEDIACTL_SMB_PASS, "
+                "or configure backup.username/backup.password in config.yaml"
+            )
+            raise typer.Exit(1)
+        target = SMBBackupTarget(destination=effective_destination, username=smb_user, password=smb_pass)
+    else:
+        from mediactl.backup.local import LocalBackupTarget
+
+        target = LocalBackupTarget(destination=effective_destination)
+
+    from mediactl.backup.engine import BackupEngine
+
+    try:
+        engine = BackupEngine(
+            source=effective_source,
+            target=target,
+            state_file=cfg.backup_state_path,
+            exclude_patterns=effective_exclude,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Backing up...", total=None)
+        result = engine.run(on_file=lambda rel: progress.update(task, description=f"Backing up: {rel}"))
+
+    console.print("\n[green]Backup complete.[/green]")
+    console.print(f"  Files scanned: {result.files_scanned}")
+    console.print(f"  Files copied: {result.files_copied}")
+    console.print(f"  Files unchanged: {result.files_unchanged}")
+    console.print(f"  Errors: {result.errors}")
+    if dry_run:
+        console.print("  [yellow](dry-run: no files written, no state saved)[/yellow]")
+
+
+@app.command(name="build-graph")
+def build_graph(
+    target: str | None = typer.Argument(
+        None, help="SMB URI or local path override (--source scan only). Overrides config."
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to config.yaml"),
+    source: str = typer.Option(
+        "sqlite",
+        "--source",
+        "-s",
+        help="Graph data source: 'sqlite' (derive from the indexed DB) or 'scan' (walk the root directory fresh).",
+    ),
+    update: bool = typer.Option(
+        False,
+        "--update",
+        help="Incrementally sync an existing graph DB against the source instead of a full rebuild. "
+        "Flags and reports drift (incongruences) found along the way.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Wipe and fully rebuild an existing graph DB (mutually exclusive with --update)."
+    ),
+    username: str | None = typer.Option(None, "--username", "-u", help="SMB username (--source scan only)"),
+    password: str | None = typer.Option(None, "--password", "-p", help="SMB password (--source scan only)"),
+    exclude: list[str] | None = typer.Option(
+        None, "--exclude", help="Glob patterns to exclude (--source scan only)"
+    ),
+    workers: int = typer.Option(
+        0, "--workers", "-w", help="Worker threads (0 = use config value; --source scan only)"
+    ),
+    max_depth: int | None = typer.Option(
+        None, "--max-depth", help="Max directory recursion depth (default: config value; --source scan only)"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Detect changes without writing to the graph DB"),
+    log_level: str = typer.Option("INFO", "--log-level", help="Log level"),
+) -> None:
+    """Build or update the graph DB that agentic coding tools (Claude Code, Codex, etc.)
+    query to answer questions about the media library.
+
+    Two sources: 'sqlite' derives nodes/edges from the already-indexed mediactl DB
+    (hashes, tags, duplicate groups included). 'scan' walks the root directory fresh,
+    independent of the index DB (structural nodes only).
+
+    Re-run with --update to incrementally sync an existing graph DB instead of a full
+    rebuild; drift found between the graph and the source is reported at the end.
+    """
+    from mediactl.logging_setup import setup_logging
+
+    setup_logging(log_level)
+
+    if update and force:
+        console.print("[red]--update and --force are mutually exclusive.[/red]")
+        raise typer.Exit(1)
+
+    if source not in ("sqlite", "scan"):
+        console.print(f"[red]Invalid --source: {source!r}. Must be 'sqlite' or 'scan'.[/red]")
+        raise typer.Exit(1)
+
+    cfg = _load_config_or_exit(config)
+
+    from mediactl.graphdb.session import get_graph_session, init_graph_db
+
+    init_graph_db(cfg.graph_db_path)
+
+    from sqlmodel import select
+
+    from mediactl.graphdb.models import GraphNode, GraphRun
+
+    with get_graph_session() as graph_session:
+        has_existing = graph_session.exec(select(GraphNode).limit(1)).first() is not None
+
+        if has_existing and not update and not force:
+            console.print(
+                f"[red]Graph DB already has data at {cfg.graph_db_path}.[/red]\n"
+                "Pass --update to incrementally sync it, or --force to wipe and rebuild."
+            )
+            raise typer.Exit(1)
+
+        console.print(f"[green]Building graph:[/green] source={source}, mode={'update' if update else 'build'}")
+        console.print(f"  graph_db={cfg.graph_db_path}, dry_run={dry_run}")
+
+        run_record = GraphRun(started_at=_now(), mode="update" if update else "build", source=source)
+        if not dry_run:
+            graph_session.add(run_record)
+            graph_session.commit()
+            graph_session.refresh(run_record)
+
+        from mediactl.graphdb.builder import build_from_scan, build_from_sqlite
+
+        if source == "sqlite":
+            if username or password or exclude or workers or max_depth is not None:
+                console.print(
+                    "  [yellow](--source sqlite doesn't scan — "
+                    "--username/--password/--exclude/--workers/--max-depth are ignored)[/yellow]"
+                )
+            _init_db_from_config(cfg)
+
+            from mediactl.db.session import get_session
+
+            with get_session() as index_session:
+                result = build_from_sqlite(index_session, graph_session, update=update)
+        else:
+            scan_target = target
+            use_smb = False
+            if scan_target is None:
+                if cfg.use_smb:
+                    scan_target = f"smb://{cfg.smb.host}/{cfg.smb.share}"
+                    use_smb = True
+                elif cfg.local.path:
+                    scan_target = cfg.local.path
+                else:
+                    console.print(
+                        "[red]No scan target. Provide target argument or configure smb/local in config.yaml[/red]"
+                    )
+                    raise typer.Exit(1)
+            elif scan_target.lower().startswith("smb://"):
+                use_smb = True
+
+            effective_workers = workers if workers > 0 else cfg.scanner.workers
+            effective_exclude = list(exclude or []) + cfg.scanner.exclude
+            effective_max_depth = max_depth if max_depth is not None else cfg.scanner.max_depth
+
+            console.print(f"  target={scan_target}, workers={effective_workers}, max_depth={effective_max_depth}")
+
+            from mediactl.scanner.base import BaseScanner
+
+            scanner: BaseScanner
+            if use_smb:
+                from mediactl.scanner.smb import SMBScanner
+
+                smb_user, smb_pass = _resolve_smb_credentials(username, password, cfg)
+                if not smb_user or not smb_pass:
+                    console.print("[red]SMB credentials are required for SMB scans.[/red]")
+                    raise typer.Exit(1)
+                scanner = SMBScanner(
+                    username=smb_user,
+                    password=smb_pass,
+                    exclude_patterns=effective_exclude,
+                    max_depth=effective_max_depth,
+                    workers=effective_workers,
+                )
+            else:
+                from mediactl.scanner.local import LocalScanner
+
+                scanner = LocalScanner(
+                    exclude_patterns=effective_exclude,
+                    max_depth=effective_max_depth,
+                    workers=effective_workers,
+                )
+
+            result = build_from_scan(scanner, scan_target, graph_session, update=update)
+
+        if dry_run:
+            graph_session.rollback()
+        else:
+            graph_session.commit()
+
+            run_record.completed_at = _now()
+            run_record.nodes_created = result.nodes_created
+            run_record.nodes_updated = result.nodes_updated
+            run_record.nodes_removed = result.nodes_removed
+            run_record.edges_created = result.edges_created
+            run_record.edges_removed = result.edges_removed
+            run_record.incongruences_count = result.incongruences_count
+            graph_session.add(run_record)
+            graph_session.commit()
+
+    console.print("\n[green]Graph build complete.[/green]")
+    console.print(f"  Nodes created: {result.nodes_created}")
+    console.print(f"  Nodes updated: {result.nodes_updated}")
+    console.print(f"  Nodes removed: {result.nodes_removed}")
+    console.print(f"  Edges created: {result.edges_created}")
+    console.print(f"  Edges removed: {result.edges_removed}")
+    if dry_run:
+        console.print("  [yellow](dry-run: no changes written)[/yellow]")
+
+    if update:
+        if result.incongruences_count:
+            console.print(f"\n[yellow]Incongruences detected: {result.incongruences_count}[/yellow]")
+            table = Table(title="Graph/Source Incongruences (sample)", show_header=True)
+            table.add_column("Kind", style="dim")
+            table.add_column("Type")
+            table.add_column("Key", overflow="fold")
+            table.add_column("Field")
+            table.add_column("Old", overflow="fold")
+            table.add_column("New", overflow="fold")
+
+            flagged = [e for e in result.incongruences if e.kind in ("updated", "removed")]
+            for entry in flagged[:20]:
+                table.add_row(
+                    entry.kind, entry.node_type, entry.key,
+                    entry.field or "", entry.old_value or "", entry.new_value or "",
+                )
+            console.print(table)
+            if len(flagged) > 20:
+                console.print(f"  ... and {len(flagged) - 20} more (see full report)")
+        else:
+            console.print("\n[green]No incongruences detected — graph matches source.[/green]")
+
+        if not dry_run:
+            from mediactl.graphdb.builder import write_incongruence_report
+
+            report_path = write_incongruence_report(result, cfg.graph_db_path)
+            console.print(f"  Full report: {report_path}")
 
 
 @app.command()

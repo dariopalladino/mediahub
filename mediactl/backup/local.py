@@ -15,26 +15,26 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-Tests for database initialization behavior."""
+Local/mounted filesystem backup target (external drives, NAS mounts, etc.).
+"""
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
+import shutil
+from pathlib import Path, PurePosixPath
 
-from mediactl.db.session import init_db
+from mediactl.backup.base import BaseBackupTarget
 
 
-def test_init_db_creates_scans_table(tmp_path: Path) -> None:
-    """init_db creates the scans table required by scan command."""
-    db_path = tmp_path / "init.db"
-    init_db(db_path)
+class LocalBackupTarget(BaseBackupTarget):
+    """Writes backup files under a local/mounted destination root."""
 
-    conn = sqlite3.connect(db_path)
-    try:
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='scans'"
-        ).fetchall()
-    finally:
-        conn.close()
+    def __init__(self, destination: str) -> None:
+        self.root = Path(destination).expanduser()
 
-    assert rows == [("scans",)]
+    def write(self, rel_path: str, local_source: Path) -> None:
+        dest_path = self.root / PurePosixPath(rel_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local_source, dest_path)
+
+    def describe(self) -> str:
+        return str(self.root)

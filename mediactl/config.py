@@ -66,12 +66,44 @@ class MOCConfig:
 
 
 @dataclass
+class GraphConfig:
+    path: str = "./mediahub_graph.db"
+
+
+@dataclass
+class BackupConfig:
+    """Independent backup module. Disabled unless explicitly enabled."""
+
+    enabled: bool = False
+    source: str = ""          # local dir to back up; falls back to local.path if empty
+    destination: str = ""     # local/mounted path OR smb://host/share[/path]
+    username: str = ""        # SMB destination credentials (ignored for local destinations)
+    password: str = ""
+    exclude: list[str] = field(default_factory=list)
+    state_file: str = "./backup_state.json"
+
+
+@dataclass
+class SidecarsConfig:
+    """Artifact-sidecar generation for knowledge-graph tools (e.g. Graphify).
+
+    Independent module; disabled by default, same gating shape as BackupConfig.
+    """
+
+    enabled: bool = False
+    output_dir: str = ""
+
+
+@dataclass
 class Config:
     smb: SMBConfig = field(default_factory=SMBConfig)
     local: LocalConfig = field(default_factory=LocalConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     moc: MOCConfig = field(default_factory=MOCConfig)
+    backup: BackupConfig = field(default_factory=BackupConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
+    sidecars: SidecarsConfig = field(default_factory=SidecarsConfig)
 
     @property
     def db_path(self) -> Path:
@@ -82,9 +114,21 @@ class Config:
         return Path(self.moc.output_dir)
 
     @property
+    def graph_db_path(self) -> Path:
+        return Path(self.graph.path)
+
+    @property
+    def sidecars_output_path(self) -> Path:
+        return Path(self.sidecars.output_dir)
+
+    @property
     def use_smb(self) -> bool:
         """SMB takes priority over local path."""
         return bool(self.smb.host)
+
+    @property
+    def backup_state_path(self) -> Path:
+        return Path(self.backup.state_file)
 
     def validate(self) -> None:
         """Raise ConfigError if required fields missing."""
@@ -95,6 +139,32 @@ class Config:
         if not self.moc.output_dir:
             raise ConfigError(
                 "Configuration error: moc.output_dir is required."
+            )
+
+    def validate_backup(self) -> None:
+        """Raise ConfigError if the backup module is enabled but misconfigured."""
+        if not self.backup.enabled:
+            raise ConfigError(
+                "Backup module is disabled. Set backup.enabled: true in config.yaml to use it."
+            )
+        if not self.backup.source and not self.local.path:
+            raise ConfigError(
+                "Configuration error: backup.source (or local.path) must be provided."
+            )
+        if not self.backup.destination:
+            raise ConfigError(
+                "Configuration error: backup.destination is required."
+            )
+
+    def validate_sidecars(self) -> None:
+        """Raise ConfigError if the sidecars module is enabled but misconfigured."""
+        if not self.sidecars.enabled:
+            raise ConfigError(
+                "Sidecars module is disabled. Set sidecars.enabled: true in config.yaml to use it."
+            )
+        if not self.sidecars.output_dir:
+            raise ConfigError(
+                "Configuration error: sidecars.output_dir is required."
             )
 
 
@@ -121,6 +191,9 @@ def load_config(config_path: Path) -> Config:
     scanner_raw = raw.get("scanner", {}) or {}
     db_raw = raw.get("database", {}) or {}
     moc_raw = raw.get("moc", {}) or {}
+    backup_raw = raw.get("backup", {}) or {}
+    graph_raw = raw.get("graph", {}) or {}
+    sidecars_raw = raw.get("sidecars", {}) or {}
 
     cfg = Config(
         smb=SMBConfig(
@@ -137,6 +210,20 @@ def load_config(config_path: Path) -> Config:
         ),
         database=DatabaseConfig(path=db_raw.get("path", "./mediahub.db")),
         moc=MOCConfig(output_dir=moc_raw.get("output_dir", "")),
+        backup=BackupConfig(
+            enabled=backup_raw.get("enabled", False),
+            source=backup_raw.get("source", ""),
+            destination=backup_raw.get("destination", ""),
+            username=backup_raw.get("username", ""),
+            password=backup_raw.get("password", ""),
+            exclude=backup_raw.get("exclude", []),
+            state_file=backup_raw.get("state_file", "./backup_state.json"),
+        ),
+        graph=GraphConfig(path=graph_raw.get("path", "./mediahub_graph.db")),
+        sidecars=SidecarsConfig(
+            enabled=sidecars_raw.get("enabled", False),
+            output_dir=sidecars_raw.get("output_dir", ""),
+        ),
     )
 
     cfg.validate()

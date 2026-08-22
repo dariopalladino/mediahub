@@ -9,6 +9,8 @@ CLI to build your Media Server database, find any file with semantic searches, g
 - Detects duplicate files by content hash (SHA256) — independent of filename
 - Extracts metadata: EXIF (images), ffprobe (video), mutagen (audio), PyMuPDF/python-docx (documents)
 - Generates Obsidian-compatible Maps of Content (MOCs)
+- Builds a SQLite property graph and Artifact-sidecar Markdown files for agentic
+  coding/knowledge-graph tools to query
 - Fully incremental — skips unchanged files on rescan
 - Read-only by default — no file is ever modified or deleted
 
@@ -110,6 +112,34 @@ mediactl generate-moc --output-dir /path/to/vault
 mediactl generate-moc --dry-run
 ```
 
+### Generate knowledge-graph sidecars
+
+Emits one Artifact-sidecar Markdown file per indexed file (YAML frontmatter +
+short body), matching the format a downstream graph compiler (e.g. Graphify)
+expects as input. Only deterministic facts mediactl actually knows are filled in
+— path, hash, timestamps, MOC membership, duplicate status — never topics,
+entities, or summaries, since mediactl has no content-understanding pipeline.
+`status: inventoried` / `needs_enrichment: true` mark that clearly for whatever
+processes the sidecar next.
+
+Disabled by default. Requires `sidecars.enabled: true` and `sidecars.output_dir`
+in config.yaml.
+
+**Create-only by default**: once a sidecar exists, later runs skip it rather than
+overwrite it, since an agentic harness may have since enriched it by hand (added
+topics, a summary, curated relationships). Use `--force` to intentionally
+regenerate from scratch.
+
+```bash
+mediactl generate-sidecars
+
+# Overwrite existing sidecars (destroys any manual enrichment — use deliberately)
+mediactl generate-sidecars --force
+
+# Preview
+mediactl generate-sidecars --dry-run
+```
+
 ### Statistics
 
 ```bash
@@ -121,6 +151,36 @@ mediactl stats
 ```bash
 mediactl find "invoice"
 mediactl find "vacation" --limit 20
+```
+
+### Build the graph DB (for agentic tools)
+
+Builds/updates a SQLite property graph (`graph.path` in config, default
+`./mediahub_graph.db`) of files, directories, tags, media types, and duplicate
+groups — meant to be queried by agentic coding harnesses (Claude Code, Codex,
+GitHub Copilot, etc.) to answer questions about the media library.
+
+```bash
+# Full build from the already-indexed mediactl DB (hashes/tags/dup groups included)
+mediactl build-graph
+
+# Full build by walking the root directory fresh, independent of the index DB
+mediactl build-graph --source scan
+
+# Incrementally sync an existing graph DB against its source; drift found
+# between the graph and the source ("incongruences") is flagged and written
+# to graph_reports/graph_<source>_update_<timestamp>.json next to the graph DB
+mediactl build-graph --update
+mediactl build-graph --source scan --update
+
+# Wipe and fully rebuild an existing graph DB
+mediactl build-graph --force
+
+# Scanner-style options apply to --source scan
+mediactl build-graph --source scan --workers 4 --exclude "*.tmp" --max-depth 3
+
+# Preview without writing
+mediactl build-graph --update --dry-run
 ```
 
 ## Development
@@ -155,9 +215,14 @@ app/
 │   ├── fingerprint.py      # Streaming MD5/SHA256 hashing
 │   ├── dedupe.py           # Duplicate detection + canonical selection
 │   ├── moc.py              # Obsidian MOC generator
+│   ├── sidecars.py         # Artifact-sidecar generator (Graphify/knowledge-graph input)
 │   ├── db/
 │   │   ├── models.py       # SQLModel table definitions
 │   │   └── session.py      # SQLite engine + session factory
+│   ├── graphdb/
+│   │   ├── models.py       # GraphNode/GraphEdge/GraphRun (isolated SQLModel metadata)
+│   │   ├── session.py      # Graph SQLite engine + session factory
+│   │   └── builder.py      # Build/update from sqlite or scan + incongruence reporting
 │   ├── scanner/
 │   │   ├── base.py         # Abstract BaseScanner
 │   │   ├── local.py        # Local filesystem scanner
@@ -172,7 +237,9 @@ app/
     ├── test_scanner.py
     ├── test_fingerprint.py
     ├── test_dedupe.py
-    └── test_moc.py
+    ├── test_moc.py
+    ├── test_graphdb.py
+    └── test_sidecars.py
 ```
 
 ## Database
@@ -180,6 +247,11 @@ app/
 SQLite at `./mediahub.db` (configurable). Schema: `files`, `scans`, `tags`, `file_tags`.
 
 The SQLite index is the source of truth. Markdown MOCs are generated artifacts.
+
+A separate SQLite graph DB (`./mediahub_graph.db`, configurable via `graph.path`)
+mirrors the index as a property graph — `graph_nodes` (file/directory/tag/media_type/
+duplicate_group) and `graph_edges` (CONTAINS/HAS_TAG/HAS_TYPE/DUPLICATE_OF/MEMBER_OF)
+— for agentic coding tools to query directly. See `mediactl build-graph`.
 
 ## Plugin Architecture
 

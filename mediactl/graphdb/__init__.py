@@ -15,26 +15,8 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-Tests for database initialization behavior."""
-from __future__ import annotations
+Property-graph database for agentic query consumption (Claude Code, Codex, etc).
 
-import sqlite3
-from pathlib import Path
-
-from mediactl.db.session import init_db
-
-
-def test_init_db_creates_scans_table(tmp_path: Path) -> None:
-    """init_db creates the scans table required by scan command."""
-    db_path = tmp_path / "init.db"
-    init_db(db_path)
-
-    conn = sqlite3.connect(db_path)
-    try:
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='scans'"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    assert rows == [("scans",)]
+Stores files/directories/tags/media-types/duplicate-groups as nodes and their
+relations as edges in a dedicated SQLite file, separate from the main index DB.
+"""

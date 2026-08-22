@@ -36,6 +36,7 @@ coverage.xml
 *.log
 logs/
 vault/
+backup_state.json
 
 # Config with secrets
 config.yaml
